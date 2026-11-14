@@ -1,0 +1,7 @@
+{
+  "metadata": {"source": "mock", "sequence": "synthetic-demo", "coordinate_frame": "local_enu", "units": "meters", "scenario_label": "Illustrative demonstration"},
+  "frames": [
+    {"time": 0.0, "ground_truth": {"x": 0.0, "y": 0.0, "yaw": 0.0}, "estimated": {"x": 0.1, "y": -0.1, "yaw": 0.02}, "baseline": {"x": 0.0, "y": 0.0}, "position_error": 0.141421356, "baseline_error": 0.0, "position_std_m": 0.3, "gps_status": "nominal", "gps_accepted": true, "satellites": 12}
+  ],
+  "metrics": {"rmse_m": 0.141421356, "baseline_rmse_m": 0.0, "max_error_m": 0.141421356}
+}
