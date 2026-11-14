@@ -236,6 +236,9 @@ class OrchardGuard(QMainWindow):
         except Exception as exc:
             self.backend_error=f"{type(exc).__name__}: {exc}"
             result=generate_mock_results(self.scenario)
+        if not self.use_backend:
+            self.poller.stop()
+            return
         if self.requested_scenario is not None:
             scenario=self.requested_scenario;self.requested_scenario=None
             self.start_backend(scenario)
@@ -246,6 +249,7 @@ class OrchardGuard(QMainWindow):
     def start_backend(self,scenario):
         if self.pending is not None:
             self.requested_scenario=dict(scenario)
+            self.integration.setText("Scenario queued; waiting for current calculation…")
             return
         self.integration.setText("Computing CitrusFarm localization in background…")
         self.pending=self.executor.submit(self.compute_backend,dict(scenario))
@@ -269,6 +273,8 @@ class OrchardGuard(QMainWindow):
     def update_scenario(self):
         self.quality_label.setText(f"Quality: {self.scenario['gps_quality']:.0%}  |  Trees: {len(self.scenario['trees'])}")
         if self.use_backend:
+            if not self.results:
+                self.apply_results(generate_mock_results(self.scenario))
             self.start_backend(dict(self.scenario))
         else:
             self.requested_scenario=None
