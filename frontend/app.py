@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import Qt, QTimer, QPointF, QRectF, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel,
@@ -141,6 +142,11 @@ class OrchardGuard(QMainWindow):
         self.scenario={"gps_quality":0.85,"outage_enabled":False,"trees":[],"random_seed":42}
         self.results={}
         self.index=0;self.playing=False
+        self.executor=ThreadPoolExecutor(max_workers=1)
+        self.pending=None
+        self.requested_scenario=None
+        self.backend_error=""
+        self.use_backend=False
         base=QWidget();self.setCentralWidget(base)
         root=QVBoxLayout(base);root.setSpacing(12);root.setContentsMargins(16,16,16,16)
         top=QHBoxLayout()
@@ -154,11 +160,18 @@ class OrchardGuard(QMainWindow):
         self.farm=Sketch("farm");self.farm.tree_added.connect(self.add_tree);left.addWidget(self.farm,1)
         self.scene=QLabel("Click orchard to place a virtual canopy zone (not measured tree locations).")
         self.scene.setWordWrap(True);left.addWidget(self.scene)
+        self.zone_radius=QSpinBox();self.zone_radius.setRange(2,30)
+        self.zone_radius.setValue(6);self.zone_radius.setSuffix(" m canopy radius")
+        left.addWidget(self.zone_radius)
         ctl=QHBoxLayout()
         self.play=QPushButton("Play");self.play.clicked.connect(self.toggle_play);ctl.addWidget(self.play)
         reset=QPushButton("Restart");reset.clicked.connect(self.restart);ctl.addWidget(reset)
         clear=QPushButton("Clear trees");clear.clicked.connect(self.clear_trees);ctl.addWidget(clear)
         left.addLayout(ctl)
+        left.addWidget(self.heading("Replay timeline"))
+        self.timeline=QSlider(Qt.Horizontal);self.timeline.setRange(0,0)
+        self.timeline.valueChanged.connect(self.scrub);left.addWidget(self.timeline)
+        self.time_label=QLabel("0.0 s / 0.0 s");left.addWidget(self.time_label)
         left.addWidget(self.heading("GNSS reliability (synthetic)"))
         self.quality=QSlider(Qt.Horizontal);self.quality.setRange(0,100);self.quality.setValue(85)
         self.quality.valueChanged.connect(self.change_quality);left.addWidget(self.quality)
@@ -168,6 +181,10 @@ class OrchardGuard(QMainWindow):
         left.addWidget(self.heading("Playback speed"))
         self.speed=QSpinBox();self.speed.setRange(1,8);self.speed.setValue(2);self.speed.setSuffix("×")
         left.addWidget(self.speed)
+        self.real_toggle=QCheckBox("Use CitrusFarm backend (when available)")
+        self.real_toggle.toggled.connect(self.change_mode);left.addWidget(self.real_toggle)
+        self.integration=QLabel("Synthetic demonstration — no real dataset loaded")
+        self.integration.setWordWrap(True);left.addWidget(self.integration)
         right.addWidget(self.heading("Reference vs estimated pose"))
         self.traj=Sketch("trajectory");right.addWidget(self.traj,1)
         right.addWidget(self.heading("Localization error"))
@@ -177,12 +194,13 @@ class OrchardGuard(QMainWindow):
         legend=QLabel("BLUE  Ground truth   |   ORANGE  Estimated   |   GRAY  Wheel baseline")
         legend.setObjectName("muted");right.addWidget(legend)
         self.timer=QTimer(self);self.timer.setInterval(65);self.timer.timeout.connect(self.tick)
+        self.poller=QTimer(self);self.poller.setInterval(100);self.poller.timeout.connect(self.poll_backend)
         self.update_scenario()
 
     def heading(self,t):
         l=QLabel(t);l.setObjectName("heading");return l
     def add_tree(self,x,y):
-        self.scenario["trees"].append({"x":round(x,2),"y":round(y,2),"radius_m":6.0,"severity":0.7})
+        self.scenario["trees"].append({"x":round(x,2),"y":round(y,2),"radius_m":float(self.zone_radius.value()),"severity":0.7})
         self.update_scenario()
     def clear_trees(self):
         self.scenario["trees"].clear();self.update_scenario()
@@ -190,17 +208,85 @@ class OrchardGuard(QMainWindow):
         self.scenario["gps_quality"]=v/100;self.update_scenario()
     def change_outage(self,v):
         self.scenario["outage_enabled"]=v;self.update_scenario()
-    def update_scenario(self):
-        # Later: invoke real backend here, preferably in a worker thread for long runs.
-        self.results=generate_mock_results(self.scenario)
-        self.index=min(self.index,len(self.results["frames"])-1)
-        self.quality_label.setText(f"Quality: {self.scenario['gps_quality']:.0%}  |  Trees: {len(self.scenario['trees'])}")
+    def change_mode(self, enabled):
+        self.use_backend=enabled
+        self.backend_error=""
+        self.update_scenario()
+
+    def scrub(self, index):
+        if self.results and self.results.get("frames"):
+            self.index=min(index,len(self.results["frames"])-1)
+            self.draw()
+
+    @staticmethod
+    def compute_backend(scenario):
+        from backend.run import run_localization
+        result=run_localization(scenario)
+        if not isinstance(result,dict) or not result.get("frames"):
+            raise ValueError("Backend returned no frames")
+        if result.get("metadata",{}).get("source")!="citrusfarm":
+            raise ValueError("Backend result must identify CitrusFarm source")
+        return result
+
+    def poll_backend(self):
+        if self.pending is None or not self.pending.done():return
+        future=self.pending;self.pending=None
+        try:
+            result=future.result()
+        except Exception as exc:
+            self.backend_error=f"{type(exc).__name__}: {exc}"
+            result=generate_mock_results(self.scenario)
+        if not self.use_backend:
+            self.poller.stop()
+            return
+        if self.requested_scenario is not None:
+            scenario=self.requested_scenario;self.requested_scenario=None
+            self.start_backend(scenario)
+            return
+        self.apply_results(result)
+        self.poller.stop()
+
+    def start_backend(self,scenario):
+        if self.pending is not None:
+            self.requested_scenario=dict(scenario)
+            self.integration.setText("Scenario queued; waiting for current calculation…")
+            return
+        self.integration.setText("Computing CitrusFarm localization in background…")
+        self.pending=self.executor.submit(self.compute_backend,dict(scenario))
+        self.poller.start()
+
+    def apply_results(self,result):
+        self.results=result
+        self.index=min(self.index,len(result["frames"])-1)
+        self.timeline.blockSignals(True)
+        self.timeline.setRange(0,len(result["frames"])-1)
+        self.timeline.setValue(self.index)
+        self.timeline.blockSignals(False)
+        source=result.get("metadata",{}).get("source","unknown")
+        real=source=="citrusfarm"
+        self.mode.setText("CITRUSFARM DATA" if real else "MOCK DATA — SYNTHETIC TRAJECTORY")
+        self.integration.setText("Real recorded data; faults are synthetic." if real else
+            ("Backend unavailable: "+self.backend_error+" — displaying mock data." if self.backend_error else
+             "Synthetic demonstration — not measured CitrusFarm performance."))
         self.draw()
+
+    def update_scenario(self):
+        self.quality_label.setText(f"Quality: {self.scenario['gps_quality']:.0%}  |  Trees: {len(self.scenario['trees'])}")
+        if self.use_backend:
+            if not self.results:
+                self.apply_results(generate_mock_results(self.scenario))
+            self.start_backend(dict(self.scenario))
+        else:
+            self.requested_scenario=None
+            self.backend_error=""
+            self.apply_results(generate_mock_results(self.scenario))
     def draw(self):
         frames=self.results["frames"];self.farm.set_data(frames,self.index,self.scenario["trees"])
         self.traj.set_data(frames,self.index,[])
         self.error.set_data(frames,self.index)
+        self.timeline.blockSignals(True);self.timeline.setValue(self.index);self.timeline.blockSignals(False)
         f=frames[self.index];m=self.results["metrics"]
+        self.time_label.setText(f"{f['time']:.1f} s / {frames[-1]['time']:.1f} s")
         self.status.setText(f"t={f['time']:.2f}s  |  GPS: {f['gps_status'].upper()}  |  Current error: {f['position_error']:.2f} m  |  RMSE: {m['rmse_m']:.2f} m  |  σ: {f['position_std_m']:.2f} m")
     def toggle_play(self):
         self.playing=not self.playing
@@ -213,6 +299,11 @@ class OrchardGuard(QMainWindow):
         self.index=min(len(self.results["frames"])-1,self.index+self.speed.value())
         self.draw()
         if self.index==len(self.results["frames"])-1:self.playing=False;self.timer.stop();self.play.setText("Play")
+
+    def closeEvent(self,event):
+        self.timer.stop();self.poller.stop()
+        self.executor.shutdown(wait=False,cancel_futures=True)
+        super().closeEvent(event)
 
 def main():
     app=QApplication(sys.argv)
