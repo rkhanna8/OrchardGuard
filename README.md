@@ -2,16 +2,23 @@
 
 Native PySide6 desktop replay of CitrusFarm sensors. The operator view separates **measured error against the post-processed RTK reference**, estimated uncertainty, recorded GPS receiver health, and recommended speed. Ground truth never enters localization.
 
-## Launch on this Mac
+## Quick start
+
+1. [Download the Sequence 01 sensor ZIP](https://github.com/rkhanna8/OrchardGuard/releases/download/v1.0.0/orchardguard-sensors.zip) (3.4 MB). Keep it zipped.
+2. From a terminal, clone the repository and install the dependencies in a fresh Python environment:
 
 ```bash
-cd ~/Documents/OrchardGuard
-/tmp/orchardguard-qt-test/bin/python -m frontend.app --data "$HOME/Documents/orchardguard-sensors.zip"
+git clone https://github.com/rkhanna8/OrchardGuard.git
+cd OrchardGuard
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m frontend.app --data "$HOME/Downloads/orchardguard-sensors.zip"
 ```
 
-Or omit `--data` and use **Open sensor ZIP**. This interpreter is the verified environment; it is temporary and may disappear after reboot/cleanup. Do not use the old project `.venv`. On another machine, install `requirements.txt` into a supported Python environment and run `python -m frontend.app`.
+Adjust the ZIP path if your browser saved it elsewhere. On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1` and pass the actual ZIP path. You can also launch with `python -m frontend.app` and select the ZIP with **Open sensor ZIP**. A successful load shows **RECORDED · 01_13B_Jackal**. Launching without a recording starts in labeled mock mode.
 
-The app starts in explicitly labeled mock mode without a recording. Failed imports retain the active recording, scenario, and playback position with a visible error. Unchecking **Use recorded CitrusFarm sensors** explicitly selects mock mode.
+Failed imports retain the active recording, scenario, and playback position with a visible error. Unchecking **Use recorded CitrusFarm sensors** explicitly selects mock mode.
 
 ## Operator controls
 
@@ -69,12 +76,6 @@ Use `reference_frame: "enu"` if reference coordinates are already East/North. Op
 
 An optional timestamped `receiver_state.csv` inside the ZIP is used causally. Sequence 01 can also use ignored `data/receiver_state.csv`, or an explicit `ORCHARDGUARD_DIAGNOSTICS` path. `ORCHARDGUARD_DATA` supplies a backend default ZIP path. Fault zones reset on a successful new import; failed imports restore the active session.
 
-Current local paths:
-
-- `~/Documents/orchardguard-sensors.zip`
-- `~/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag`
-- `~/Documents/citrusfarm/01_13B_Jackal/odom_2023-07-18-14-26-48.bag`
-
 Keep recordings, ZIPs, diagnostics, and generated replays in ignored `data/` or outside Git. The previously tracked sensor CSVs were removed from tracking; their local copies remain. No history was rewritten.
 
 ## Verification and reproduction
@@ -82,14 +83,14 @@ Keep recordings, ZIPs, diagnostics, and generated replays in ignored `data/` or 
 See **[evidence and limitations](docs/verification.md)** and **[all benchmark rows](docs/benchmark.csv)** for before/after errors, rejection cascades, coverage, 0.5/1/2 m tolerances, 10/30/60 s outages, full outage, and the real LiDAR trial.
 
 ```bash
-ORCHARDGUARD_TEST_DATA="$HOME/Documents/orchardguard-sensors.zip" \
-  /tmp/orchardguard-qt-test/bin/python -m unittest discover -s tests -v
+ORCHARDGUARD_TEST_DATA="$HOME/Downloads/orchardguard-sensors.zip" \
+  python -m unittest discover -s tests -v
 
-/tmp/orchardguard-qt-test/bin/python tools/benchmark.py \
-  --zip "$HOME/Documents/orchardguard-sensors.zip"
+python tools/benchmark.py \
+  --zip "$HOME/Downloads/orchardguard-sensors.zip"
 
-/tmp/orchardguard-qt-test/bin/python tools/verify_desktop.py \
-  --data "$HOME/Documents/orchardguard-sensors.zip"
+python tools/verify_desktop.py \
+  --data "$HOME/Downloads/orchardguard-sensors.zip"
 ```
 
 Real-data tests are explicitly skipped without `ORCHARDGUARD_TEST_DATA`. The desktop harness opens the actual window and activates the Open ZIP button, supplying chooser selections for reproducibility; it does not validate OS-native dialog interaction. Generated logs/screenshots stay in `data/`.
@@ -97,13 +98,13 @@ Real-data tests are explicitly skipped without `ORCHARDGUARD_TEST_DATA`. The des
 Inventory and experimental scan matching (NumPy/stdlib; the supplied bag is uncompressed):
 
 ```bash
-/tmp/orchardguard-qt-test/bin/python tools/inventory_bag.py \
-  "$HOME/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
-  "$HOME/Documents/citrusfarm/01_13B_Jackal/odom_2023-07-18-14-26-48.bag"
+python tools/inventory_bag.py \
+  "/path/to/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
+  "/path/to/citrusfarm/01_13B_Jackal/odom_2023-07-18-14-26-48.bag"
 
-/tmp/orchardguard-qt-test/bin/python tools/lidar_baseline.py \
-  --bag "$HOME/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
-  --zip "$HOME/Documents/orchardguard-sensors.zip"
+python tools/lidar_baseline.py \
+  --bag "/path/to/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
+  --zip "$HOME/Downloads/orchardguard-sensors.zip"
 ```
 
 Optional receiver re-extraction uses `python -m backend.diagnostics BAG --output data/receiver_state.csv` and requires the optional `rosbags` package. The existing ZIP replay does not require that package or the bag.
