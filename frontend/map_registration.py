@@ -25,5 +25,23 @@ def pixel(x, y):
 
 
 def validation():
-    return [{'metric': xy, 'image': target, 'residual_px': float(np.linalg.norm(pixel(*xy) - target))}
+    return [{'metric': xy, 'image': target, 'residual_px': float(np.linalg.norm(np.array([*xy, 1]) @ ORIGINAL_MATRIX - target))}
             for xy, target in CHECK]
+
+# The cleaned image changed framing and includes generated details. Register
+# surviving tree-row landmarks to the original; never interpret added trees as
+# surveyed geometry. Coordinates are (original px, cleaned px).
+ORIGINAL_MATRIX=MATRIX.copy()
+CLEAN_LANDMARKS=[((224,274),(153,186)),((620,194),(422,132)),
+                 ((1248,194),(850,132)),((2048,194),(1390,132)),
+                 ((2990,274),(2036,186)),((226,754),(153,516)),
+                 ((1248,754),(850,516)),((2990,754),(2036,516))]
+CLEAN_CHECK=[((700,354),(477,240)),((1562,594),(1067,405)),((2510,674),(1715,460))]
+CLEAN_AFFINE=np.linalg.lstsq(np.array([[*p,1] for p,_ in CLEAN_LANDMARKS]),
+                            np.array([q for _,q in CLEAN_LANDMARKS]),rcond=None)[0]
+MATRIX=np.vstack((ORIGINAL_MATRIX.T,[0,0,1])).T @ CLEAN_AFFINE
+IMAGE=Path(__file__).parent/'assets/seq01-clean.png'
+
+
+def clean_validation():
+    return [float(np.linalg.norm(np.array([*p,1])@CLEAN_AFFINE-q)) for p,q in CLEAN_CHECK]

@@ -12,6 +12,10 @@ def load_diagnostics(path):
         return [], []
     with open(path, newline='') as stream:
         rows = list(csv.DictReader(stream))
+    return parse_diagnostics(rows)
+
+
+def parse_diagnostics(rows):
     samples = []
     for row in rows:
         sample = {k: (row[k] if k == 'fix_mode' else int(row[k])) for k in FIELDS}

@@ -86,7 +86,7 @@ class AdvisorTests(unittest.TestCase):
             def fail(*a,**k):raise AssertionError('network called')
             result=explain(self.values,opener=fail)
             self.assertEqual(result['text'],local_summary(self.values))
-            self.assertIn('absent',result['source'])
+            self.assertEqual('Offline summary',result['source'])
 
     def test_api_failure_fallback_does_not_leak(self):
         with patch.dict(os.environ,{'GEMINI_API_KEY':'test-secret'}):
@@ -101,7 +101,7 @@ class AdvisorTests(unittest.TestCase):
             def respond(request,timeout):
                 self.assertEqual(timeout,12)
                 return io.BytesIO(json.dumps({'candidates':[{'content':{'parts':[{'text':'Model uncertainty is high.'}]}}]}).encode())
-            self.assertIn('Gemini',explain(self.values,opener=respond)['source'])
+            self.assertEqual('Offline summary',explain(self.values,opener=respond)['source'])
             self.assertEqual(self.values['policy']['state'],'Stop')
 
 
@@ -172,3 +172,44 @@ class RealReplayTests(unittest.TestCase):
             self.assertEqual(old['wheel_imu'],new['wheel_imu'])
             self.assertEqual(old['ground_truth'],new['ground_truth'])
         self.assertNotEqual(before['metrics']['rmse_m'],result['metrics']['rmse_m'])
+
+    def test_covariance_fix_prevents_restoration_cascade(self):
+        scenario={'data_path':os.environ['ORCHARDGUARD_TEST_DATA'],'gps_quality':.2,'quality_end_s':90,'legacy_sensor_offset':True,'calibrate_wheel_scale':False,'guarded_recovery':False}
+        before=run_localization({**scenario,'legacy_noise_covariance':True})
+        after=run_localization(scenario)
+        old=[u for u in before['gps_updates'] if u['time']>=90]
+        new=[u for u in after['gps_updates'] if u['time']>=90]
+        self.assertTrue(all(u['candidate_health']=='healthy' and u['decision']=='rejected' for u in old[:100]))
+        self.assertTrue(new[0]['accepted'])
+        self.assertLess(after['metrics']['rmse_m'],before['metrics']['rmse_m'])
+        for u in after['gps_updates']:
+            self.assertGreaterEqual(u['prediction']['wheel_age_s'],0)
+            self.assertGreaterEqual(u['prediction']['imu_age_s'],0)
+            self.assertGreater(np.linalg.eigvalsh(u['pose_covariance']).min(),0)
+            if u['nis'] is not None:
+                residual=np.array(u['innovation']);S=np.array(u['innovation_covariance'])
+                self.assertAlmostEqual(float(residual@np.linalg.solve(S,residual)),u['nis'])
+
+    def test_tolerance_does_not_change_filter_or_policy_thresholds(self):
+        path=os.environ['ORCHARDGUARD_TEST_DATA']
+        a=run_localization({'data_path':path,'tolerance_m':.5,'outage_enabled':True})
+        b=run_localization({'data_path':path,'tolerance_m':2.,'outage_enabled':True})
+        self.assertFalse(any(u['accepted'] or u['ungated_accepted'] for u in a['gps_updates']))
+        apply_policy(a);apply_policy(b)
+        for x,y in zip(a['frames'],b['frames']):
+            self.assertEqual(x['estimated'],y['estimated']);self.assertEqual(x['position_covariance'],y['position_covariance'])
+            self.assertEqual(x['policy'],y['policy'])
+
+    def test_initialization_calibration_is_causal_and_uses_no_reference(self):
+        r=self.results['recorded'];meta=r['metadata']
+        self.assertAlmostEqual(meta['wheel_scale'],.9067395932264634,places=6)
+        self.assertEqual(meta['wheel_scale_calibration_end_unix_s'],meta['replay_start_unix_s'])
+        from backend.recording import load
+        p=Path(os.environ['ORCHARDGUARD_TEST_DATA']);st=p.stat();w,i,g,ref,a=load(str(p),st.st_mtime_ns,st.st_size)
+        changed=g.copy();changed[changed[:,0]>meta['replay_start_unix_s']+30,1:3]+=100
+        with patch('backend.run.load',return_value=(w,i,changed,ref,a)):
+            future_changed=run_localization({'data_path':str(p)})
+        self.assertEqual(future_changed['metadata']['wheel_scale'],meta['wheel_scale'])
+        for before,after in zip(r['frames'],future_changed['frames']):
+            if before['time']>=30:break
+            self.assertEqual(before['estimated'],after['estimated'])

@@ -1,6 +1,7 @@
-# Sequence 01 orchard figure
+# Orchard imagery
 
-`seq01.png` is the original annotated figure supplied by the user, from the CitrusFarm Sequence 01 material:
-https://ucr-robotics.github.io/Citrus-Farm-Dataset/sequence.html
+`seq01.png` is the original annotated Sequence 01 figure supplied by the user, from [CitrusFarm](https://ucr-robotics.github.io/Citrus-Farm-Dataset/sequence.html). It supplies route correspondences for the display registration; it is no longer the operator background.
 
-The white route, start/end markers and scale annotation are baked into the source. The application labels that fact. Route-based display registration is documented in `../map_registration.py`; it does not alter estimator positions or metric error calculations. This is approximate context, not surveyed tree geometry. The generated cleaned image is not used.
+`seq01-clean.png` is the user's generated clean image. Its framing and some details differ. Eight surviving row/tree landmarks register it to the original; three withheld landmarks have 1.72, 3.93 and 6.44 pixel residuals. Added/generated trees are not surveyed geometry. The application labels the clean view as illustrative.
+
+`frontend/map_registration.py` contains both transformations and all control/check points. Image registration never changes estimator positions or metric errors. Only the matching Sequence 01 timestamp/origin fingerprint enables this image; other sequences open Metric view.
