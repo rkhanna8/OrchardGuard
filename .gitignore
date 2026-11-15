@@ -19,3 +19,8 @@ results/
 *.zip
 *.tar
 *.tar.gz
+/wheel.csv
+/imu.csv
+/gps.csv
+/gt.csv
+AGENTS.md.backup

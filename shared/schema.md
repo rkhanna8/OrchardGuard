@@ -64,3 +64,39 @@ Frontend uses `frontend.mock_data.generate_mock_results(scenario)` today. When r
 
 ## Ownership
 Shared schema changes need approval from both people. Keep `sample_scenario.json` and `sample_results.json` in sync if changed.
+
+## Integrated replay extensions (backwards-compatible)
+
+The current frontend supports explicit mock selection; failed real runs retain the
+previous display with a visible error and never silently substitute mock results.
+
+Optional scenario fields: `data_path` (ZIP), `diagnostics_path` (CSV),
+`scenario_type` (`recorded`, `outage`, `jump`), `fault_start_s` (30),
+`fault_end_s` (60), `jump_m` (10), `tolerance_m` (2), `recovery_s` (3),
+`gps_max_age_s` (1), and `diagnostics_max_age_s` (2). Times are seconds after
+shared GPS initialization. `outage_enabled` remains the full-outage override.
+The timed fault interval is half-open [start, end). `trees` and `gps_quality`
+are additional explicitly simulated controls. `random_seed` controls them.
+
+For real replay, `baseline` is wheel-only forward-speed/wheel-yaw integration;
+`wheel_imu` and `ungated` are additional poses with corresponding errors.
+`satellites` is a recorded count or **null** when diagnostics are unavailable,
+never an invented count. Extra frame fields include `initialized`,
+`gps_decision` (`accepted`, `rejected`, `unavailable`), `gps_reason`, `gps_nis`,
+`accepted_fix_age_s`, `position_covariance` (2×2, m²), `confidence_pct`
+(nullable Gaussian model probability within `tolerance_m`), `receiver`,
+`fault_active`, and `speed_mps`. No downweighting decision is claimed.
+`gps_accepted` means at least one accepted correction since the prior frame;
+`gps_updates` contains individual timestamped update decisions.
+
+`metadata` includes initialization, replay start Unix time, timing/frame audit,
+reference caveat, scenario snapshot, and fault interval. The frontend adds a
+precomputed `policy` to frames for synchronized seeking; it has no physical
+actuation and never modifies measured trajectories.
+
+`metrics.comparisons` has `gated`, `ungated`, `wheel_imu`, and `wheel_only` entries:
+`rmse_m`, `peak_error_m`, `fault_within_tolerance_s` (nullable),
+`fault_duration_s`, `recovery_s` (nullable), and `recovery_status`.
+Recovery time includes sustained dwell; unavailable recovery is explicitly
+`did not recover`, and a scenario without a fault is `not applicable`.
+Existing top-level metric keys are retained. Mock examples above remain valid.

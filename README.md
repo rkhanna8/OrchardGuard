@@ -1,41 +1,117 @@
 # OrchardGuard
 
-Native desktop localization demonstrator for the UIUC Precision & Digital Agriculture Hackathon (Robotics Challenge 1).
+Native PySide6 desktop replay of CitrusFarm sensors. The operator view separates **measured error against the post-processed RTK reference**, estimated uncertainty, recorded GPS receiver health, and recommended speed. Ground truth never enters localization.
 
-**Current state:** Qt desktop frontend runs using **SYNTHETIC mock data**. Do not present it as CitrusFarm localization output until connected to the real backend.
-
-## Run
-
-Python 3.10 or later.
+## Launch on this Mac
 
 ```bash
-git clone https://github.com/rkhanna8/OrchardGuard.git
-cd OrchardGuard
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python -m frontend.app
+cd ~/Documents/OrchardGuard
+/tmp/orchardguard-qt-test/bin/python -m frontend.app --data "$HOME/Documents/orchardguard-sensors.zip"
 ```
 
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. PySide6 creates a separate native application window, **not a website**.
+Or omit `--data` and use **Open sensor ZIP**. This interpreter is the verified environment; it is temporary and may disappear after reboot/cleanup. Do not use the old project `.venv`. On another machine, install `requirements.txt` into a supported Python environment and run `python -m frontend.app`.
 
-### Controls
-Play/pause, restart, speed control, simulated GNSS quality slider, click anywhere in the orchard to add a virtual canopy-degradation zone, and clear trees. Two synchronized plots compare true/estimated trajectories and position error over time. Real backend integration is not yet implemented; UI runs on a reproducible demonstration scenario.
+The app starts in explicitly labeled mock mode without a recording. Failed imports retain the active recording, scenario, and playback position with a visible error. Unchecking **Use recorded CitrusFarm sensors** explicitly selects mock mode.
 
-## Work split
-- Localization: `backend/`; preprocessing CitrusFarm, wheel+IMU baseline, EKF, fault injection, evaluation, exported contract.
-- Desktop UI: `frontend/`; Qt visuals, input controls, playback, graphs, session management. Start with `frontend/mock_data.py`.
-- Shared: `shared/schema.md`, `AGENTS.md`, requirements, and integrations. Coordinate before changing them.
+## Operator controls
 
-## Branches and checks
+- **Orchard image**: clean registered Sequence 01 context, centered aspect-preserving cover. Drag to pan, scroll to zoom, click to add a synthetic obstruction zone. Imagery, trails, ellipse, scale, and clicks share one transform. The clean image is illustrative, not surveyed tree geometry. Unmatched sequences open **Metric view**.
+- **RTK reference** is blue, gated estimate orange, ungated estimate pink, wheel baseline gray. The metric view also shows wheel+IMU in teal. The ellipse is always the 95% Gaussian model region; evaluation tolerance does not change it.
+- The graph is **Position error at each moment (m)**, synchronized with the selected frame. Missing reference intervals appear as gaps. Whole-replay RMSE stays under **Evaluation**.
+- Play/pause, restart, playback speed, and timeline scrub use the same frame for map, graph, GPS state, uncertainty and policy. Playback speed is independent of the recommended motion speed.
+- **Recorded GPS**, **Simulated timed outage**, and **Simulated lateral jump** share initialization. Default fault interval is 30–60 s; default lateral jump is 10 m. Full-outage override blocks every GPS correction after initialization.
+- **Simulated quality** adds seeded position noise and dropouts to the estimator GPS input. Clicked zones reduce that quality locally. It never changes recorded satellite counts. Reset restores quality 100%, no zones, and recorded GPS.
+- Receiver counts come from the actual `receiver_state.num_sat` field. The latest preceding sample is shown with age; absent or older than 2 s is **Unavailable**.
+- **Advisor is entirely offline**. It explains GPS loss/weakness/recovery, wheel+IMU prediction, the local speed decision, and measured replay error. No API key or network service is used.
+
+## Policy settings
+
+Normal / Slow / Stop recommend **100% / 35% / 0%** nominal speed during replay. Defaults:
+
+| Condition | Slow | Stop |
+|---|---:|---:|
+| Horizontal covariance summary, sqrt(trace(Pxy)) | ≥1 m | ≥3 m |
+| Time since a trusted GPS correction | ≥2 s | ≥8 s |
+
+Escalation is immediate. Improvement requires **3 s sustained recovery per step**, Stop → Slow → Normal. Missing/stale prediction inputs also cause Stop. A noisy accepted correction refreshes trusted-fix age only after sustained innovation consistency: at least 10 accepted fixes spanning 2 s within a 3 s window, no accepted-sample gap over 0.8 s, mean innovation ≤0.75 m, mean NIS ≤3, window mean-noise RMS ≤0.5 m (sum of measurement covariance traces / sample count² ≤0.25 m²), and no reported receiver fault. Rejection resets this evidence. This policy observer does not change EKF updates or its recovery guard. Recorded replay continues when Stop is recommended. No LiDAR fallback has been validated, so it does not override this policy.
+
+Change thresholds in **Fault timing / tolerance / policy**. Evaluation tolerance defaults to **1.0 m** and is independent of policy thresholds, the 95% ellipse, and the recovery guard's 2 m bound.
+
+## Localization and integrity
+
+Prediction continuously integrates wheel forward speed and bias-corrected IMU yaw rate, including while GPS is good. Initialization ends at the first 3 m of valid GPS travel: GPS position, course heading, stationary gyro bias, and a guarded wheel-speed calibration use only samples at/before that instant. For this ZIP, the causal speed scale is 0.9067396. It is shared by all comparisons. Unknown global initialization fails explicitly rather than fabricating a map pose.
+
+Sequence 01 prediction accounts for the published GPS antenna offset, −0.18 m along body x relative to `base_link`. No per-estimator fitted alignment is applied. Wheel-only uses wheel yaw rate; wheel+IMU, ungated fusion, and gated EKF use IMU yaw rate. No ML is involved.
+
+GPS corrections require finite valid positions, non-future/fresh timestamps and usable covariance. The existing 0.04 m² covariance floor remains; **known injected noise variance is now added**. The jump scenario deliberately preserves reported covariance/status. Ungated fusion has the same validity, freshness, covariance, controls and initialization; it bypasses the innovation/discontinuity guards.
+
+The gated path uses NIS ≤9.21 plus a position-change consistency guard. Abrupt GPS discontinuities are quarantined. Recovery requires five fresh healthy fixes over 0.3–1.0 s, mutually consistent within 0.5 m and within 2 m of the wheel+IMU continuation of the last trusted fused pose. A bounded recovery update inflates covariance before a Joseph-form correction; it never hard-resets to a single fix. Large uncertain relocalizations are deliberately refused. This cannot detect every slowly varying GPS bias.
+
+The reference and recorded GPS share an RTK source. Metrics are **error against the post-processed RTK reference**, not independent absolute accuracy. “Last GPS correction” and “Last trusted GPS fix” are displayed separately. Stop explanations name the actual threshold. The always-visible uncertainty card shows “Estimated chance within [tolerance] m” from the current covariance; detailed model probability and empirical coverage remain under Diagnostics, explicitly uncalibrated; values near one display `>99.9%`, never rounded `100.0%`. Covariance remains conservative in tested GPS-free intervals.
+
+## ZIP import and local data
+
+Legacy `wheel.csv`, `imu.csv`, `gps.csv`, `gt.csv` ZIPs remain supported. The reference header identifies the legacy sequence. Optional `metadata.json` supports other recordings:
+
+```json
+{
+  "sequence": "02_13B_Jackal",
+  "source": "citrusfarm",
+  "reference_frame": "north_west",
+  "sensor_sequences": {
+    "wheel": "02_13B_Jackal", "imu": "02_13B_Jackal",
+    "gps": "02_13B_Jackal", "gt": "02_13B_Jackal"
+  }
+}
+```
+
+Use `reference_frame: "enu"` if reference coordinates are already East/North. Optional `origin_lla: [latitude, longitude]` declares a shared origin; otherwise the first valid GPS position is the origin. Optional `time_bounds_unix_s: [start,end]` is checked against sensor streams. Conflicting sequence declarations, duplicate/mixed folders, malformed streams, unsupported frames, and insufficient overlap fail visibly. Sequence 01 imagery/default diagnostics require its known timestamp/origin fingerprint; they never carry into another sequence. Synthetic test ZIPs use `source: "fixture"` and show **FIXTURE · NOT MEASURED DATA**.
+
+An optional timestamped `receiver_state.csv` inside the ZIP is used causally. Sequence 01 can also use ignored `data/receiver_state.csv`, or an explicit `ORCHARDGUARD_DIAGNOSTICS` path. `ORCHARDGUARD_DATA` supplies a backend default ZIP path. Fault zones reset on a successful new import; failed imports restore the active session.
+
+Current local paths:
+
+- `~/Documents/orchardguard-sensors.zip`
+- `~/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag`
+- `~/Documents/citrusfarm/01_13B_Jackal/odom_2023-07-18-14-26-48.bag`
+
+Keep recordings, ZIPs, diagnostics, and generated replays in ignored `data/` or outside Git. The previously tracked sensor CSVs were removed from tracking; their local copies remain. No history was rewritten.
+
+## Verification and reproduction
+
+See **[evidence and limitations](docs/verification.md)** and **[all benchmark rows](docs/benchmark.csv)** for before/after errors, rejection cascades, coverage, 0.5/1/2 m tolerances, 10/30/60 s outages, full outage, and the real LiDAR trial.
+
 ```bash
-git switch -c feature/localization
-# teammate instead uses: git switch -c feature/dashboard
-python -m unittest discover -s tests -v
+ORCHARDGUARD_TEST_DATA="$HOME/Documents/orchardguard-sensors.zip" \
+  /tmp/orchardguard-qt-test/bin/python -m unittest discover -s tests -v
+
+/tmp/orchardguard-qt-test/bin/python tools/benchmark.py \
+  --zip "$HOME/Documents/orchardguard-sensors.zip"
+
+/tmp/orchardguard-qt-test/bin/python tools/verify_desktop.py \
+  --data "$HOME/Documents/orchardguard-sensors.zip"
 ```
 
-Do not commit datasets, `.bag` files, large outputs, secrets, or virtual environments. See `AGENTS.md`.
+Real-data tests are explicitly skipped without `ORCHARDGUARD_TEST_DATA`. The desktop harness opens the actual window and activates the Open ZIP button, supplying chooser selections for reproducibility; it does not validate OS-native dialog interaction. Generated logs/screenshots stay in `data/`.
 
-**Challenge deadline:** Sunday Nov 15, 2026, 12:00 PM (per track PDF); demo video max two minutes.
+Inventory and experimental scan matching (NumPy/stdlib; the supplied bag is uncompressed):
 
-Dataset: https://ucr-robotics.github.io/Citrus-Farm-Dataset/
+```bash
+/tmp/orchardguard-qt-test/bin/python tools/inventory_bag.py \
+  "$HOME/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
+  "$HOME/Documents/citrusfarm/01_13B_Jackal/odom_2023-07-18-14-26-48.bag"
+
+/tmp/orchardguard-qt-test/bin/python tools/lidar_baseline.py \
+  --bag "$HOME/Documents/citrusfarm/01_13B_Jackal/base_2023-07-18-14-26-48_0.bag" \
+  --zip "$HOME/Documents/orchardguard-sensors.zip"
+```
+
+Optional receiver re-extraction uses `python -m backend.diagnostics BAG --output data/receiver_state.csv` and requires the optional `rosbags` package. The existing ZIP replay does not require that package or the bag.
+
+## Two-minute walkthrough
+
+1. **0:00–0:25:** Open Sequence 01, Recorded GPS, quality 100%. Explain RTK reference, estimate, measured error and uncertainty separately.
+2. **0:25–0:55:** Timed outage; seek to 28 s and play through the fault. Show trusted-fix age, growing uncertainty and Slow → Stop while replay continues. Seek to 70 s for recovery.
+3. **0:55–1:25:** Lateral jump; seek to 45 s. The receiver still reports RTK/satellites, but shifted fixes are rejected. Compare gated and ungated errors under Evaluation.
+4. **1:25–1:50:** Reset, add a synthetic zone on the route, reduce quality, and explain the offline Advisor. Pan/zoom uses the same metric transform as the traces.
+5. **1:50–2:00:** State limitations: correlated RTK evaluation, approximate illustrative image, one real sequence, and LiDAR matching that failed held-out validation.
